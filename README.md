@@ -74,6 +74,9 @@ python examples/run_backtest.py
 
 # 自前の CSV(date,open,high,low,close)を使う場合
 python examples/run_backtest.py --csv-dir path/to/csvs
+
+# 過去1年(2025/7〜2026/7)の実勢レート水準に基づくシナリオ検証
+python examples/scenario_past_year.py
 ```
 
 テスト:
