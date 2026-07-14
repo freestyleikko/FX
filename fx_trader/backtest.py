@@ -265,6 +265,32 @@ class Backtester:
                             )
                             state.positions[order.pair] = pos
 
+            # --- 5. レバレッジ上限の強制執行 ---
+            # 建玉後の価格変動や残高減少でグロスが上限を超えた場合は比例縮小する
+            if state.equity > 0:
+                gross = sum(
+                    pos.notional(prices[p]) for p, pos in state.positions.items()
+                )
+                cap = cfg.portfolio.max_gross_leverage * state.equity
+                if gross > cap:
+                    scale = cap / gross
+                    for pair, pos in list(state.positions.items()):
+                        new_units = pos.units * scale
+                        cost = (
+                            abs(pos.units - new_units)
+                            * prices[pair]
+                            * cfg.transaction_cost
+                        )
+                        state.equity -= cost
+                        cost_total += cost
+                        trades.append(
+                            TradeRecord(
+                                date, pair, pos.units, new_units, prices[pair],
+                                "leverage_cap",
+                            )
+                        )
+                        pos.units = new_units
+
             equity_curve[date] = state.equity
             leverage_curve[date] = (
                 sum(

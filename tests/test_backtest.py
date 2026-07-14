@@ -19,8 +19,18 @@ def test_backtest_runs_and_produces_curve(result):
 
 
 def test_leverage_never_exceeds_limit(result):
-    # 建玉時点でグロス5倍以内(価格変動による日中の微超過は建玉基準では発生しない)
-    assert result.daily_leverage.max() <= 5.0 + 0.1
+    # 日次終値評価でグロス5倍以内(超過時は強制縮小される)
+    assert result.daily_leverage.max() <= 5.0 + 1e-3
+
+
+def test_aggressive_profile_respects_leverage_cap():
+    from fx_trader.config import SystemConfig
+
+    config = SystemConfig.aggressive()
+    ohlc = generate_synthetic_ohlc(n_days=400, seed=3)
+    result = Backtester(config, initial_equity=1_000_000).run(ohlc)
+    assert result.daily_leverage.max() <= 5.0 + 1e-3
+    assert result.equity_curve.iloc[-1] > 0
 
 
 def test_metrics_keys(result):

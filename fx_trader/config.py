@@ -91,6 +91,28 @@ class SystemConfig:
     # スワップの業者取り分(受取りは (1-h) 倍に減額、支払いは (1+h) 倍に増額)
     swap_haircut: float = 0.10
 
+    @classmethod
+    def aggressive(cls) -> "SystemConfig":
+        """アグレッシブ設定。レバレッジ上限5倍は維持したまま、
+        配分を上限近くまで使い、トレンドに長く乗る。
+
+        リスクも比例して増える(想定最大DDは30%程度)ことに注意。
+        """
+        c = cls()
+        c.strategy.entry_threshold = 0.10
+        c.strategy.exit_threshold = 0.03
+        # 各ペアに高いリスク目標を与え、グロス上限5倍まで使わせる
+        c.portfolio.target_pair_vol = 0.35
+        c.portfolio.max_pair_leverage = 3.0
+        # ストップを広げ、利確を外してトレンドに乗り続ける
+        c.risk.stop_loss_atr = 3.5
+        c.risk.take_profit_atr = 12.0
+        c.risk.max_drawdown = 0.30
+        c.risk.daily_loss_limit = 0.06
+        c.risk.cooldown_days = 3
+        c.validate()
+        return c
+
     def rate_diff(self, pair: str) -> float:
         """ペアの金利差(ベース通貨金利 − 円金利、年率%)を返す。"""
         base = BASE_CURRENCY[pair]

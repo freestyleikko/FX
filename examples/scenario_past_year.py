@@ -102,21 +102,22 @@ def build_bridged_ohlc(seed: int) -> dict[str, pd.DataFrame]:
     return out
 
 
-def make_config() -> SystemConfig:
-    config = SystemConfig()
+def make_config(profile: str = "standard") -> SystemConfig:
+    config = SystemConfig.aggressive() if profile == "aggressive" else SystemConfig()
     # 評価期間(2025/7〜2026/7)の平均的な政策金利水準
     config.policy_rates = {"USD": 3.85, "EUR": 2.05, "GBP": 4.05, "JPY": 0.75}
     return config
 
 
 def main() -> None:
+    profile = "aggressive" if "--aggressive" in sys.argv else "standard"
     n_seeds = 30
     initial_equity = 1_000_000.0
     returns, max_dds, swaps, levs = [], [], [], []
 
     for seed in range(n_seeds):
         ohlc = build_bridged_ohlc(seed)
-        bt = Backtester(make_config(), initial_equity=initial_equity)
+        bt = Backtester(make_config(profile), initial_equity=initial_equity)
         result = bt.run(ohlc)
         eq = result.equity_curve[result.equity_curve.index >= EVAL_START]
         ret = eq.iloc[-1] / eq.iloc[0] - 1.0
@@ -128,7 +129,8 @@ def main() -> None:
         levs.append(float(result.daily_leverage.max()))
 
     returns_a = np.array(returns)
-    print("=== 過去1年シナリオ検証(2025/7/14 → 2026/7/13, 30シード) ===")
+    print(f"=== 過去1年シナリオ検証(2025/7/14 → 2026/7/13, "
+          f"30シード, profile={profile}) ===")
     print(f"リターン中央値   : {np.median(returns_a):+.2%}")
     print(f"リターン平均     : {returns_a.mean():+.2%}")
     print(f"リターン範囲     : {returns_a.min():+.2%} 〜 {returns_a.max():+.2%}")

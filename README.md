@@ -77,7 +77,23 @@ python examples/run_backtest.py --csv-dir path/to/csvs
 
 # 過去1年(2025/7〜2026/7)の実勢レート水準に基づくシナリオ検証
 python examples/scenario_past_year.py
+
+# アグレッシブ設定(レバレッジ上限5倍まで使い切る。想定最大DD約30%)
+python examples/scenario_past_year.py --aggressive
 ```
+
+### 設定プロファイル
+
+| | standard(既定) | aggressive(`SystemConfig.aggressive()`) |
+|---|---|---|
+| 実効レバレッジ | 〜2倍程度 | 上限5倍に張り付き |
+| ストップロス | ATR×2.5 | ATR×3.5(トレンドに長く乗る) |
+| 利確 | ATR×5 | ATR×12 |
+| DD遮断 | 15% | 30% |
+| 過去1年の推定リターン | +9%前後 | +33%前後(最大DD約-12%) |
+
+グロスレバレッジが含み損益の変動で5倍を超えた場合は、日次で強制的に
+比例縮小して必ず5倍以内に戻します。
 
 テスト:
 
