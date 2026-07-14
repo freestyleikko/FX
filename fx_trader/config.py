@@ -62,6 +62,11 @@ class RiskParams:
     daily_loss_limit: float = 0.03  # 1日3%超の損失で当日の新規建て禁止
     # サーキットブレーカー発動後、再開までのクールダウン日数
     cooldown_days: int = 5
+    # --- 強制ロスカット(証拠金維持率ベース) ---
+    # 必要証拠金率(建玉総額に対する比率)。0.04 = 4% = 国内法定の25倍相当
+    margin_requirement: float = 0.04
+    # 証拠金維持率(有効証拠金 ÷ 必要証拠金)がこの水準を切ったら全建玉を強制決済
+    forced_loscut_level: float = 0.50
 
 
 @dataclass
@@ -90,31 +95,30 @@ class SystemConfig:
     transaction_cost: float = 0.00002
     # スワップの業者取り分(受取りは (1-h) 倍に減額、支払いは (1+h) 倍に増額)
     swap_haircut: float = 0.10
+    # 週末ノーポジション: 金曜17:00〜月曜7:00(JST)はポジションを一切持たない。
+    # 日足バックテストでは「金曜の引けで全決済・金曜は新規建てなし」として扱う
+    weekend_flat: bool = True
+    friday_close_hour_jst: int = 17
+    monday_open_hour_jst: int = 7
 
     @classmethod
-    def aggressive(cls, max_gross_leverage: float = 5.0) -> "SystemConfig":
-        """アグレッシブ設定。配分をレバレッジ上限近くまで使い、
-        トレンドに長く乗る。
+    def aggressive(cls) -> "SystemConfig":
+        """アグレッシブ設定。レバレッジ上限5倍は維持したまま、
+        配分を上限近くまで使い、トレンドに長く乗る。
 
-        Args:
-            max_gross_leverage: グロスレバレッジ上限(既定5倍、法定上限25倍まで)。
-                上限に比例してリスク目標・DD許容も自動スケールするため、
-                10倍なら想定最大DDは50%規模になることに注意。
+        リスクも比例して増える(想定最大DDは30%程度)ことに注意。
         """
         c = cls()
-        scale = max_gross_leverage / 5.0
         c.strategy.entry_threshold = 0.10
         c.strategy.exit_threshold = 0.03
-        # 各ペアに高いリスク目標を与え、グロス上限まで使わせる
-        c.portfolio.max_gross_leverage = max_gross_leverage
-        c.portfolio.target_pair_vol = 0.35 * scale
-        c.portfolio.max_pair_leverage = 3.0 * scale
+        # 各ペアに高いリスク目標を与え、グロス上限5倍まで使わせる
+        c.portfolio.target_pair_vol = 0.35
+        c.portfolio.max_pair_leverage = 3.0
         # ストップを広げ、利確を外してトレンドに乗り続ける
         c.risk.stop_loss_atr = 3.5
         c.risk.take_profit_atr = 12.0
-        # レバレッジに応じて損失許容も拡大(上限あり)
-        c.risk.max_drawdown = min(0.60, 0.30 * scale)
-        c.risk.daily_loss_limit = min(0.15, 0.06 * scale)
+        c.risk.max_drawdown = 0.30
+        c.risk.daily_loss_limit = 0.06
         c.risk.cooldown_days = 3
         c.validate()
         return c
@@ -125,10 +129,10 @@ class SystemConfig:
         return self.policy_rates[base] - self.policy_rates["JPY"]
 
     def validate(self) -> None:
-        if self.portfolio.max_gross_leverage > 25.0:
-            raise ValueError(
-                "レバレッジ上限は25倍(国内FXの法定上限)までです"
-            )
+        if self.portfolio.max_gross_leverage > 5.0:
+            raise ValueError("レバレッジ上限は自己資金の5倍までです")
+        if not 0.0 < self.risk.margin_requirement <= 1.0:
+            raise ValueError("margin_requirement は 0 より大きく 1 以下にしてください")
         if self.strategy.exit_threshold >= self.strategy.entry_threshold:
             raise ValueError("exit_threshold は entry_threshold より小さくしてください")
         w = self.strategy.trend_weight + self.strategy.carry_weight

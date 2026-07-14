@@ -5,8 +5,9 @@
 この戦略は直前まで「円安トレンド + プラス金利差」で3ペアロングに
 張り付いているため、まさに最悪のシナリオとなる。
 
-レバレッジ上限(5倍 / 10倍 / 25倍)ごとに、この局面での
-ドローダウン・最終損益・破綻(証拠金全損)率を比較する。
+特に急落の最終局面(2024/8/5)は「月曜日」に発生しており、
+週末ノーポジションルール(金曜17:00〜月曜7:00 JST)の効果を
+ON / OFF で比較検証する。レバレッジ上限はどちらも5倍。
 
 アンカーは 2024 年の実勢レート水準の近似値。
 実行: python examples/scenario_stress_2024.py
@@ -63,16 +64,19 @@ POLICY_RATES = {"USD": 5.00, "EUR": 3.50, "GBP": 5.00, "JPY": 0.15}
 EVAL_START = "2024-07-01"
 
 
-def run_profile(leverage: float, n_seeds: int = 30) -> None:
+def run_profile(weekend_flat: bool, n_seeds: int = 30) -> None:
     initial_equity = 1_000_000.0
-    returns, max_dds, ruined = [], [], 0
+    returns, max_dds, ruined, loscuts = [], [], 0, 0
 
     for seed in range(n_seeds):
         ohlc = build_anchored_ohlc(ANCHORS, ANNUAL_VOLS, seed)
-        config = SystemConfig.aggressive(max_gross_leverage=leverage)
+        config = SystemConfig.aggressive()
         config.policy_rates = dict(POLICY_RATES)
+        config.weekend_flat = weekend_flat
         result = Backtester(config, initial_equity=initial_equity).run(ohlc)
         eq = result.equity_curve[result.equity_curve.index >= EVAL_START]
+        if any(t.reason == "forced_loscut" for t in result.trades):
+            loscuts += 1
         if (eq <= 0).any():
             ruined += 1
             returns.append(-1.0)
@@ -83,11 +87,13 @@ def run_profile(leverage: float, n_seeds: int = 30) -> None:
         max_dds.append(float(((eq - peak) / peak).min()))
 
     returns_a = np.array(returns)
-    print(f"--- レバレッジ上限 {leverage:.0f}倍 ---")
+    label = "あり(金曜引け全決済)" if weekend_flat else "なし(持ち越し)"
+    print(f"--- 週末フラット {label} / レバレッジ上限5倍 ---")
     print(f"  2024/7〜12 リターン中央値: {np.median(returns_a):+.2%} "
           f"(範囲 {returns_a.min():+.2%} 〜 {returns_a.max():+.2%})")
     print(f"  最大DD中央値            : {np.median(max_dds):.2%} "
           f"(最悪 {min(max_dds):.2%})")
+    print(f"  強制ロスカット発生シード : {loscuts}/{n_seeds}")
     print(f"  破綻(残高ゼロ以下)率  : {ruined}/{n_seeds}")
     print()
 
@@ -95,8 +101,8 @@ def run_profile(leverage: float, n_seeds: int = 30) -> None:
 def main() -> None:
     print("=== ストレステスト: 2024年 円キャリー巻き戻し(30シード) ===")
     print("(2024/7/1 時点でロング満載の状態から急落局面に突入)\n")
-    for leverage in (5.0, 10.0, 25.0):
-        run_profile(leverage)
+    run_profile(weekend_flat=True)
+    run_profile(weekend_flat=False)
 
 
 if __name__ == "__main__":

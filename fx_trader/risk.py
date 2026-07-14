@@ -3,6 +3,7 @@
 - ATR ベースのストップロス / テイクプロフィット
 - 口座ドローダウンによるサーキットブレーカー(全決済 + クールダウン)
 - 日次損失限度による新規建て禁止
+- 証拠金維持率ベースの強制ロスカット
 """
 
 from __future__ import annotations
@@ -60,6 +61,36 @@ class RiskManager:
             ):
                 return "take_profit"
         return None
+
+    # ------------------------------------------------------------------
+    # 強制ロスカット(証拠金維持率)
+    # ------------------------------------------------------------------
+    def margin_ratio(self, equity: float, gross_notional: float) -> float:
+        """証拠金維持率 = 有効証拠金 ÷ 必要証拠金。
+
+        必要証拠金 = 建玉総額 × margin_requirement(既定4% = 25倍相当)。
+        建玉がない場合は inf を返す。
+        """
+        if gross_notional <= 0:
+            return float("inf")
+        required = gross_notional * self.config.risk.margin_requirement
+        return equity / required
+
+    def forced_loscut_triggered(self, equity: float, gross_notional: float) -> bool:
+        """強制ロスカット条件:
+
+        証拠金維持率 < forced_loscut_level(既定50%)、
+        または有効証拠金がゼロ以下になった場合に True。
+        発動時は全建玉を直ちに成行決済する(ブローカーの強制決済を模す)。
+        """
+        if gross_notional <= 0:
+            return False
+        if equity <= 0:
+            return True
+        return (
+            self.margin_ratio(equity, gross_notional)
+            < self.config.risk.forced_loscut_level
+        )
 
     # ------------------------------------------------------------------
     # 口座単位

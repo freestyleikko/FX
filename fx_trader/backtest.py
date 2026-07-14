@@ -3,9 +3,12 @@
 日足 OHLC を入力とし、以下を日次で処理する:
 
 1. 保有ポジションへのスワップ付与(金利差 × 建玉 / 365)
-2. 当日高安によるストップロス / テイクプロフィット判定(ギャップ考慮)
-3. 終値での評価とリスクチェック(ドローダウン遮断・日次損失限度)
-4. 終値でのシグナル計算とリバランス(取引コスト控除、レバレッジ≤5倍)
+2. 強制ロスカット判定(日中の最悪値で証拠金維持率を評価)
+3. 当日高安によるストップロス / テイクプロフィット判定(ギャップ考慮)
+4. 終値での評価とリスクチェック(ドローダウン遮断・日次損失限度)
+5. 終値でのシグナル計算とリバランス(取引コスト控除、レバレッジ≤5倍)
+   - 週末フラット: 金曜は引けで全決済し、新規建てを行わない
+     (金曜17:00〜月曜7:00 JST のノーポジションルールの日足近似)
 """
 
 from __future__ import annotations
@@ -165,7 +168,66 @@ class Backtester:
                     state.equity += s
                     swap_total += s
 
-            # --- 2. ストップ / 利確判定(ギャップ時は寄付きで不利側約定) ---
+            # --- 2. 強制ロスカット判定 ---
+            # 証拠金維持率(有効証拠金÷必要証拠金)が閾値を割った時点で
+            # 全建玉を強制決済する。日中は寄付き→不利方向の極値へ線形に
+            # 進むと近似し、維持率割れ点の価格で約定。寄付きで既に割れて
+            # いる場合(週明けの窓開け等)は寄付き価格で約定し、
+            # 結果として残高がマイナスになり得る(追証と同じ)。
+            if state.positions:
+                level = cfg.risk.forced_loscut_level
+                req = cfg.risk.margin_requirement
+
+                def _headroom(price_of) -> float:
+                    """維持率割れまでの余裕 f = 有効証拠金 − 必要証拠金×閾値。"""
+                    eq, gross = state.equity, 0.0
+                    for pair, pos in state.positions.items():
+                        px = price_of(pair, pos)
+                        ref = prev_closes.get(pair, pos.entry_price)
+                        eq += pos.units * (px - ref)
+                        gross += abs(pos.units) * px
+                    return eq - gross * req * level
+
+                def _open_px(pair, pos):
+                    return bars[pair]["open"]
+
+                def _adverse_px(pair, pos):
+                    return bars[pair]["low"] if pos.units > 0 else bars[pair]["high"]
+
+                f_open = _headroom(_open_px)
+                f_adverse = _headroom(_adverse_px)
+                fill_prices: dict[str, float] | None = None
+                if f_open < 0:
+                    # 窓開けで寄付き時点から維持率割れ → 寄付きで強制決済
+                    fill_prices = {
+                        p: float(bars[p]["open"]) for p in state.positions
+                    }
+                elif f_adverse < 0:
+                    # 日中に維持率割れ → 割れた点(線形補間)で強制決済
+                    s = f_open / (f_open - f_adverse)
+                    fill_prices = {}
+                    for pair, pos in state.positions.items():
+                        o = float(bars[pair]["open"])
+                        a = float(_adverse_px(pair, pos))
+                        fill_prices[pair] = o + s * (a - o)
+
+                if fill_prices is not None:
+                    for pair in list(state.positions):
+                        pos = state.positions[pair]
+                        fill = fill_prices[pair]
+                        ref = prev_closes.get(pair, pos.entry_price)
+                        state.equity += pos.units * (fill - ref)
+                        cost = abs(pos.units) * fill * cfg.transaction_cost
+                        state.equity -= cost
+                        cost_total += cost
+                        trades.append(
+                            TradeRecord(
+                                date, pair, pos.units, 0.0, fill, "forced_loscut"
+                            )
+                        )
+                        del state.positions[pair]
+
+            # --- 3. ストップ / 利確判定(ギャップ時は寄付きで不利側約定) ---
             for pair in list(state.positions):
                 pos = state.positions[pair]
                 if pos.units == 0:
@@ -193,7 +255,7 @@ class Backtester:
                 )
                 del state.positions[pair]
 
-            # --- 3. 終値評価 ---
+            # --- 4. 終値評価 ---
             for pair, pos in state.positions.items():
                 ref = prev_closes.get(pair, pos.entry_price)
                 state.equity += pos.units * (bars[pair]["close"] - ref)
@@ -201,9 +263,23 @@ class Backtester:
 
             prices = {p: float(bars[p]["close"]) for p in cfg.pairs}
 
-            # --- 4. リバランス ---
+            # --- 5. リバランス ---
             if i >= warmup:
-                if self.risk.circuit_breaker_active:
+                if cfg.weekend_flat and date.dayofweek == 4:
+                    # 週末フラット: 金曜の引けで全決済し、新規建てもしない
+                    for pair in list(state.positions):
+                        pos = state.positions[pair]
+                        cost = abs(pos.units) * prices[pair] * cfg.transaction_cost
+                        state.equity -= cost
+                        cost_total += cost
+                        trades.append(
+                            TradeRecord(
+                                date, pair, pos.units, 0.0, prices[pair],
+                                "weekend_flat",
+                            )
+                        )
+                        del state.positions[pair]
+                elif self.risk.circuit_breaker_active:
                     # サーキットブレーカー: 全決済
                     for pair in list(state.positions):
                         pos = state.positions[pair]
@@ -267,7 +343,7 @@ class Backtester:
                             )
                             state.positions[order.pair] = pos
 
-            # --- 5. レバレッジ上限の強制執行 ---
+            # --- 6. レバレッジ上限の強制執行 ---
             # 建玉後の価格変動や残高減少でグロスが上限を超えた場合は比例縮小する
             if state.equity > 0:
                 gross = sum(

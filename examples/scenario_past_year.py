@@ -68,11 +68,8 @@ ANNUAL_VOLS = {"USDJPY": 0.08, "EURJPY": 0.085, "GBPJPY": 0.10}
 EVAL_START = "2025-07-14"
 
 
-def make_config(profile: str = "standard", leverage: float = 5.0) -> SystemConfig:
-    if profile == "aggressive":
-        config = SystemConfig.aggressive(max_gross_leverage=leverage)
-    else:
-        config = SystemConfig()
+def make_config(profile: str = "standard") -> SystemConfig:
+    config = SystemConfig.aggressive() if profile == "aggressive" else SystemConfig()
     # 評価期間(2025/7〜2026/7)の平均的な政策金利水準
     config.policy_rates = {"USD": 3.85, "EUR": 2.05, "GBP": 4.05, "JPY": 0.75}
     return config
@@ -80,19 +77,13 @@ def make_config(profile: str = "standard", leverage: float = 5.0) -> SystemConfi
 
 def main() -> None:
     profile = "aggressive" if "--aggressive" in sys.argv else "standard"
-    leverage = 5.0
-    if "--leverage" in sys.argv:
-        leverage = float(sys.argv[sys.argv.index("--leverage") + 1])
-        profile = "aggressive"
     n_seeds = 30
     initial_equity = 1_000_000.0
     returns, max_dds, swaps, levs = [], [], [], []
 
     for seed in range(n_seeds):
         ohlc = build_anchored_ohlc(ANCHORS, ANNUAL_VOLS, seed)
-        bt = Backtester(
-            make_config(profile, leverage), initial_equity=initial_equity
-        )
+        bt = Backtester(make_config(profile), initial_equity=initial_equity)
         result = bt.run(ohlc)
         eq = result.equity_curve[result.equity_curve.index >= EVAL_START]
         ret = eq.iloc[-1] / eq.iloc[0] - 1.0
@@ -105,7 +96,7 @@ def main() -> None:
 
     returns_a = np.array(returns)
     print(f"=== 過去1年シナリオ検証(2025/7/14 → 2026/7/13, "
-          f"30シード, profile={profile}, レバレッジ上限={leverage:.0f}倍) ===")
+          f"30シード, profile={profile}) ===")
     print(f"リターン中央値   : {np.median(returns_a):+.2%}")
     print(f"リターン平均     : {returns_a.mean():+.2%}")
     print(f"リターン範囲     : {returns_a.min():+.2%} 〜 {returns_a.max():+.2%}")
@@ -115,7 +106,7 @@ def main() -> None:
     print(f"最大DD中央値     : {np.median(max_dds):.2%}")
     print(f"スワップ損益中央値: {np.median(swaps):+,.0f} 円 "
           f"(初期資金 {initial_equity:,.0f} 円)")
-    print(f"最大レバレッジ   : {max(levs):.2f} 倍 (上限 {leverage:.2f})")
+    print(f"最大レバレッジ   : {max(levs):.2f} 倍 (上限 5.00)")
 
 
 if __name__ == "__main__":
