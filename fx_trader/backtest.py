@@ -42,6 +42,7 @@ class BacktestResult:
     cost_paid: float
     daily_leverage: pd.Series
     weights_history: pd.DataFrame
+    leverage_cap: float = 5.0
 
     def metrics(self) -> dict[str, float]:
         eq = self.equity_curve
@@ -77,7 +78,8 @@ class BacktestResult:
             f"取引回数          : {int(m['num_trades'])}",
             f"スワップ損益累計   : {m['swap_pnl']:+,.0f} 円",
             f"取引コスト累計     : {m['cost_paid']:,.0f} 円",
-            f"最大レバレッジ     : {m['max_leverage']:.2f} 倍 (上限 5.00)",
+            f"最大レバレッジ     : {m['max_leverage']:.2f} 倍 "
+            f"(上限 {self.leverage_cap:.2f})",
         ]
         return "\n".join(lines)
 
@@ -310,4 +312,5 @@ class Backtester:
             cost_paid=cost_total,
             daily_leverage=pd.Series(leverage_curve, name="gross_leverage"),
             weights_history=pd.DataFrame(weights_history).T,
+            leverage_cap=cfg.portfolio.max_gross_leverage,
         )

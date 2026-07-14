@@ -56,8 +56,8 @@ def test_deterministic_with_same_seed():
     assert r1.equity_curve.equals(r2.equity_curve)
 
 
-def test_leverage_validation_rejects_over_five():
+def test_leverage_validation_rejects_over_legal_cap():
     config = SystemConfig()
-    config.portfolio.max_gross_leverage = 10.0
+    config.portfolio.max_gross_leverage = 30.0  # 法定上限25倍を超える
     with pytest.raises(ValueError):
         Backtester(config)

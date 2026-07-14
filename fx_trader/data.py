@@ -71,6 +71,49 @@ def generate_synthetic_ohlc(
     return out
 
 
+def build_anchored_ohlc(
+    anchors: dict[str, list[tuple[str, float]]],
+    annual_vols: dict[str, float],
+    seed: int = 0,
+) -> dict[str, pd.DataFrame]:
+    """実勢レートのアンカー(日付, 価格)をブラウニアンブリッジで補間した
+    近似日足 OHLC を生成する(シナリオ検証用)。
+
+    アンカー日ではノイズがゼロに固定されるため、大局のトレンドはアンカー通り、
+    日々の細かい値動きのみが乱数に依存する。
+    """
+    rng = np.random.default_rng(seed)
+    out: dict[str, pd.DataFrame] = {}
+    for pair, pair_anchors in anchors.items():
+        anchor_dates = pd.DatetimeIndex([a[0] for a in pair_anchors])
+        anchor_logs = np.log([a[1] for a in pair_anchors])
+        index = pd.bdate_range(anchor_dates[0], anchor_dates[-1])
+        n = len(index)
+
+        # アンカーの対数価格を時間比で線形補間(基準パス)
+        t = index.view("int64").astype(float)
+        ta = anchor_dates.view("int64").astype(float)
+        base = np.interp(t, ta, anchor_logs)
+
+        # ブラウニアンブリッジノイズ(アンカー日でゼロに固定)
+        vol_d = annual_vols[pair] / np.sqrt(252)
+        noise = np.cumsum(rng.standard_normal(n) * vol_d)
+        pin = np.interp(t, ta, np.interp(ta, t, noise))
+        bridged = noise - pin
+
+        close = np.exp(base + bridged)
+        open_ = np.empty(n)
+        open_[0] = close[0]
+        open_[1:] = close[:-1] * np.exp(rng.standard_normal(n - 1) * vol_d * 0.2)
+        intraday = np.abs(rng.standard_normal(n)) * vol_d * close * 0.6
+        high = np.maximum(open_, close) + intraday
+        low = np.minimum(open_, close) - intraday
+        out[pair] = pd.DataFrame(
+            {"open": open_, "high": high, "low": low, "close": close}, index=index
+        )
+    return out
+
+
 def load_csv_ohlc(
     csv_dir: str | Path, pairs: tuple[str, ...] = PAIRS
 ) -> dict[str, pd.DataFrame]:
